@@ -1,43 +1,32 @@
-#include "ros/ros.h"
-#include "nodelet/loader.h"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp_components/component_manager.hpp"
 
 int main(int argc, char **argv) {
-  // Getting the IP address
-  /*
-  std::string ip;
-  std::cout << "Please enter the simulator's IP address: ";
-  std::cin >> ip;
+  // Initialize ROS2
+  rclcpp::init(argc, argv);
 
-  int port = 5001;
-  */
+  // Create a component manager
+  rclcpp::executors::SingleThreadedExecutor executor;
+  rclcpp::NodeOptions options;
+  auto component_manager = std::make_shared<rclcpp_components::ComponentManager>(&executor, options);
 
-  ros::init(argc, argv, "leica_streaming_app_serial_node");
-  nodelet::Loader nodelet;
-  nodelet::M_string remap(ros::names::getRemappings());
-  nodelet::V_string nargv;
-  std::string nodelet_name = ros::this_node::getName();
-  nodelet.load(nodelet_name, "leica_streaming_app/leica_streaming_app_serial_nodelet", remap, nargv);
-  ros::spin();
+  // Load the component
+  auto component = component_manager->load_component(
+    "leica_streaming_app",
+    "leica_streaming_app::LeicaStreamingAppSerialNode"
+  );
 
-  /*
-  std::string ch;
-  while (true) {
-    getline(std::cin, ch);
-
-    if (!ch.empty()) {
-      std::cout << ch << std::endl;
-      switch (ch.c_str()[0]) {
-        case 'e':
-          ts.end();
-          std::cout << "Measurements stopped." << std::endl;
-          break;
-        case 's':
-          ts.start();
-          break;
-      }
-    }
+  if (component == nullptr) {
+    RCLCPP_ERROR(rclcpp::get_logger("leica_streaming_app_serial_node"), "Failed to load component");
+    return 1;
   }
-  */
+
+  // Spin the executor
+  executor.spin();
+
+  // Shutdown ROS2
+  rclcpp::shutdown();
 
   return 0;
 }
+

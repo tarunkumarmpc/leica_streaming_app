@@ -1,10 +1,3 @@
-/**
- * \file tcp_total_station_interface.cpp
- * \author Andreas Ziegler
- * \date 31.05.2018
- * \brief Implementation of the tcp total station interface
- */
-
 #include <iostream>
 #include <string>
 #include <thread>

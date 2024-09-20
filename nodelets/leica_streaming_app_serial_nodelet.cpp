@@ -6,60 +6,49 @@ g++ main.cpp -lboost_system -lboost_thread -lpthread -o leica_streaming_receiver
 #include <string>
 #include <boost/asio.hpp>
 
-#include "ros/ros.h"
-#include "pluginlib/class_list_macros.h"
-#include "geometry_msgs/PointStamped.h"
-#include "nav_msgs/Odometry.h"
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "tf2_ros/transform_broadcaster.h"
+#include "tf2/LinearMath/Quaternion.h"
 
-#include "leica_streaming_app/leica_streaming_app_serial_nodelet.h"
+#include "leica_streaming_app/leica_streaming_app_serial_nodelet.hpp"
 
 namespace leica_streaming_app {
 
-LeicaStreamingAppSerialNodelet::LeicaStreamingAppSerialNodelet()
-  : ts_(std::bind(&LeicaStreamingAppSerialNodelet::locationTSCallback,
+LeicaStreamingAppSerialNode::LeicaStreamingAppSerialNode()
+  : Node("leica_streaming_app_serial_node"),
+    ts_(std::bind(&LeicaStreamingAppSerialNode::locationTSCallback,
                 this,
                 std::placeholders::_1,
                 std::placeholders::_2,
                 std::placeholders::_3)) {
-}
-
-LeicaStreamingAppSerialNodelet::~LeicaStreamingAppSerialNodelet() {
-}
-
-void LeicaStreamingAppSerialNodelet::onInit() {
-  nh_ = getNodeHandle();
-  private_nh_ = getPrivateNodeHandle();
-
+  
+  this->declare_parameter<std::string>("comport", "/dev/ttyUSB0");
   std::string comport;
-  private_nh_.param<std::string>("comport", comport, "/dev/ttyUSB0");
+  this->get_parameter("comport", comport);
   ts_.connect(comport);
 
-  prism_pos_pub_ = nh_.advertise<geometry_msgs::PointStamped>("/leica/position", 10,
-      boost::bind(&LeicaStreamingAppSerialNodelet::connectCb, this),
-      boost::bind(&LeicaStreamingAppSerialNodelet::disconnectCb, this));
+  prism_pos_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/leica/position", 10);
+  pos_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+    "/paintcopter/position", 10, 
+    std::bind(&LeicaStreamingAppSerialNode::positionCb, this, std::placeholders::_1));
+  start_stop_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+    "/leica/start_stop", 10, 
+    std::bind(&LeicaStreamingAppSerialNode::startStopCb, this, std::placeholders::_1));
+
+  tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
 }
 
-void LeicaStreamingAppSerialNodelet::connectCb() {
-  if (!prism_pos_pub_ && prism_pos_pub_.getNumSubscribers() > 0) {
-    NODELET_INFO("Connecting to odom/vicon position topic.");
-    pos_sub_ = nh_.subscribe("/paintcopter/position", 10, &LeicaStreamingAppSerialNodelet::positionCb, this);
-    start_stop_sub_ = nh_.subscribe("/leica/start_stop", 10, &LeicaStreamingAppSerialNodelet::startStopCb, this);
-  }
+LeicaStreamingAppSerialNode::~LeicaStreamingAppSerialNode() {
 }
 
-void LeicaStreamingAppSerialNodelet::disconnectCb() {
-  if (prism_pos_pub_.getNumSubscribers() == 0) {
-    NODELET_INFO("Unsubscribing from odom/vison position topic.");
-    pos_sub_.shutdown();
-    start_stop_sub_.shutdown();
-  }
-}
-
-void LeicaStreamingAppSerialNodelet::positionCb(const nav_msgs::Odometry::ConstPtr& msg) {
+void LeicaStreamingAppSerialNode::positionCb(const nav_msgs::msg::Odometry::SharedPtr msg) {
   ts_.setPrismPosition(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
 }
 
-void LeicaStreamingAppSerialNodelet::startStopCb(const std_msgs::Bool::ConstPtr& msg) {
+void LeicaStreamingAppSerialNode::startStopCb(const std_msgs::msg::Bool::SharedPtr msg) {
   if (msg->data) {
     ts_.start();
   } else {
@@ -67,40 +56,38 @@ void LeicaStreamingAppSerialNodelet::startStopCb(const std_msgs::Bool::ConstPtr&
   }
 }
 
-void LeicaStreamingAppSerialNodelet::locationTSCallback(const double x,
-                                                  const double y,
-                                                  const double z) {
-  /*
-  std::cout << "Prism is at x: " << x 
-            << " y: " << y
-            << " z: " << z << std::endl;
-  std::cout << std::endl;
-  */
-  geometry_msgs::PointStamped msg;
-  msg.header.stamp = ros::Time::now();
-  msg.header.frame_id = "world";
-  msg.point.x = x;
-  msg.point.y = y;
-  msg.point.z = z;
+void LeicaStreamingAppSerialNode::locationTSCallback(const double x,
+                                                     const double y,
+                                                     const double z) {
+  auto msg = std::make_unique<geometry_msgs::msg::PointStamped>();
+  msg->header.stamp = this->now();
+  msg->header.frame_id = "world";
+  msg->point.x = x;
+  msg->point.y = y;
+  msg->point.z = z;
 
-  prism_pos_pub_.publish(msg);
+  prism_pos_pub_->publish(std::move(msg));
 
-  transformStamped_.header.stamp = ros::Time::now();
-  transformStamped_.header.frame_id = "world";
-  transformStamped_.child_frame_id = "leica_pos";
-  transformStamped_.transform.translation.x = x;
-  transformStamped_.transform.translation.y = y;
-  transformStamped_.transform.translation.z = z;
+  geometry_msgs::msg::TransformStamped t;
+  t.header.stamp = this->now();
+  t.header.frame_id = "world";
+  t.child_frame_id = "leica_pos";
+  t.transform.translation.x = x;
+  t.transform.translation.y = y;
+  t.transform.translation.z = z;
 
-  q_.setRPY(0, 0, 0);
-  transformStamped_.transform.rotation.x = q_.x();
-  transformStamped_.transform.rotation.y = q_.y();
-  transformStamped_.transform.rotation.z = q_.z();
-  transformStamped_.transform.rotation.w = q_.w();
+  tf2::Quaternion q;
+  q.setRPY(0, 0, 0);
+  t.transform.rotation.x = q.x();
+  t.transform.rotation.y = q.y();
+  t.transform.rotation.z = q.z();
+  t.transform.rotation.w = q.w();
 
-  br_.sendTransform(transformStamped_);
-
+  tf_broadcaster_->sendTransform(t);
 }
 
 } // namespace leica_streaming_app
-PLUGINLIB_DECLARE_CLASS(leica_streaming_app, LeicaStreamingAppSerialNodelet, leica_streaming_app::LeicaStreamingAppSerialNodelet, nodelet::Nodelet);
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(leica_streaming_app::LeicaStreamingAppSerialNode)
+

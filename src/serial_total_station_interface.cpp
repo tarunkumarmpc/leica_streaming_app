@@ -90,6 +90,11 @@ void SerialTSInterface::writeHandler(const boost::system::error_code& ec,
   }
 }
 
+
+void SerialTSInterface::searchPrism() {
+    // Implementation logic for searching prism
+}
+
 void SerialTSInterface::readHandler(const boost::system::error_code& ec,
                               std::size_t bytes_transferred) {
   if (!ec) {
